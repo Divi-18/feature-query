@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>US National Parks Query</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+
+        #viewDiv {
+            width: 100%;
+            height: 100%;
+        }
+
+        #panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 10px;
+            width: 320px;
+            border-radius: 8px;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: limegreen;
+            color: black;
+            font-weight: bold;
+            border: none;
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background-color: green;
+            color: white;
+        }
+
+        #results {
+            margin-top: 10px;
+            font-size: 14px;
+            max-height: 300px;
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .park-item {
+            padding: 5px;
+            border-bottom: 1px solid gray;
+            cursor: pointer;
+        }
+
+        .park-item b {
+            font-size: 16px;
+            color: lightgreen;
+        }
+
+        select,
+        label {
+            width: 100%;
+            display: block;
+            margin-top: 5px;
+        }
+    </style>
+    <script src="https://js.arcgis.com/4.27/"></script>
+</head>
+
+<body>
+    <div id="viewDiv"></div>
+    <div id="panel">
+        <h3>Most or Least Visited Parks by State</h3>
+        <label><input type="radio" name="order" value="DESC" checked> Most visited</label>
+        <label><input type="radio" name="order" value="ASC"> Least visited</label>
+
+        <label>Number of parks per state:</label>
+        <select id="numParks">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+        </select>
+
+        <label>Year:</label>
+        <select id="year">
+            <option value="F2018">2018</option>
+            <option value="F2019" selected>2019</option>
+            <option value="F2020">2020</option>
+        </select>
+
+        <button onclick="queryParks()">Query Parks</button>
+        <button onclick="clearQuery()">Clear Query</button>
+
+        <div id="results">Results will appear here...</div>
+    </div>
+
+    <script>
+        require(["esri/Map", "esri/views/MapView", "esri/layers/FeatureLayer", "esri/symbols/WebStyleSymbol", "esri/renderers/SimpleRenderer"], function (Map, MapView, FeatureLayer, WebStyleSymbol, SimpleRenderer) {
+
+            const map = new Map({ basemap: "dark-gray-vector" });
+            const view = new MapView({
+                container: "viewDiv",
+                map: map,
+                center: [-98.35, 39.50],
+                zoom: 4
+            });
+            const parkSymbol = new WebStyleSymbol({
+                name: "Asset 109trees",
+                styleUrl: "https://cdn.arcgis.com/sharing/rest/content/items/e08037675f354ea1bab42359b9a0c04b/data"
+            });
+            const parkRenderer = new SimpleRenderer({
+                symbol: parkSymbol
+            });
+
+            const parksLayer = new FeatureLayer({
+                url: "https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/US_National_Parks_Annual_Visitation/FeatureServer/0",
+                outFields: ["Park", "State", "F2018", "F2019", "F2020"],
+                renderer: parkRenderer
+            });
+
+            map.add(parksLayer);
+
+            // Query function
+            window.queryParks = function () {
+                const yearField = document.getElementById("year").value;
+                const order = document.querySelector('input[name="order"]:checked').value;
+                const numParks = parseInt(document.getElementById("numParks").value);
+
+                const query = parksLayer.createQuery();
+                query.where = "1=1";
+                query.outFields = ["Park", "State", yearField];
+                query.orderByFields = [`${yearField} ${order}`];
+                query.returnGeometry = true;
+                query.num = 1000; // Fetch all parks first
+
+                parksLayer.queryFeatures(query).then((result) => {
+                    const features = result.features;
+                    const stateWiseParks = {};
+
+                    // Group parks by state
+                    features.forEach((feature) => {
+                        const state = feature.attributes.State;
+                        if (!stateWiseParks[state]) {
+                            stateWiseParks[state] = [];
+                        }
+                        stateWiseParks[state].push(feature);
+                    });
+
+                    // Select only the top N parks per state
+                    const selectedParks = [];
+                    Object.keys(stateWiseParks).forEach((state) => {
+                        const parks = stateWiseParks[state].slice(0, numParks); // Take top N parks
+                        selectedParks.push(...parks);
+                    });
+
+                    if (selectedParks.length === 0) {
+                        document.getElementById("results").innerHTML = "<p>No results found.</p>";
+                        return;
+                    }
+
+                    displayResults(selectedParks, yearField);
+                }).catch((error) => {
+                    console.error("Query Failed:", error);
+                    document.getElementById("results").innerText = "Error fetching data.";
+                });
+            };
+
+            // Display results
+            function displayResults(features, yearField) {
+                const resultsDiv = document.getElementById("results");
+                resultsDiv.innerHTML = `<h4>Results: ${features.length} parks</h4>`;
+
+                features.forEach((feature) => {
+                    const attributes = feature.attributes;
+                    const parkName = attributes.Park || "Unknown";
+                    const state = attributes.State;
+                    const visitors = attributes[yearField] || 0;
+
+                    const parkItem = document.createElement("div");
+                    parkItem.classList.add("park-item");
+                    parkItem.innerHTML = `<b>${parkName}</b><br>Total visitors: ${visitors.toLocaleString()}<br>State: ${state}`;
+                    parkItem.onclick = () => {
+                        view.goTo(feature.geometry);
+                        view.popup.open({
+                            title: parkName,
+                            content: `State: ${state}<br>Visitors: ${visitors.toLocaleString()}`,
+                            location: feature.geometry
+                        });
+                    };
+                    resultsDiv.appendChild(parkItem);
+                });
+            }
+
+            // Clear results
+            window.clearQuery = function () {
+                document.getElementById("results").innerHTML = "Results will appear here...";
+                view.popup.close();
+            };
+        });
+    </script>
+</body>
+
+</html>
